@@ -5,7 +5,7 @@ package net.guohaitao.sword.jedis;
  * Description: Redis Db Name对象，用于区分不同的业务使用
  */
 public enum RedisDbName {
-    SHARE(1), WWW(2), HULU(3);
+    DEFAULT(0), INDEX_1(1), INDEX_2(2), INDEX_3(3), INDEX_4(4), INDEX_5(5);
     private int index;
 
     private RedisDbName(int index) {
