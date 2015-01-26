@@ -22,6 +22,11 @@ import java.util.logging.Logger;
 /**
  * Created by i@guohaitao.net on 14-10-16.
  * Description: Jedis客户端工具
+ * <p/>
+ * 一主双从结构。主服务器推荐使用keepalive 主备模式，而不是单机,保证高可用。
+ * <p/>
+ * 从服务器只用来Read，双机保证高可用。
+ * <p/>
  * 需要分别设置本地host来明确服务地址 redis.master.local,redis.slave1.local,redis.slave2.local
  */
 public final class RedisPool {
