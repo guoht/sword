@@ -1,4 +1,4 @@
-package net.guohaitao.sword;
+package net.guohaitao.sword.http;
 
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;

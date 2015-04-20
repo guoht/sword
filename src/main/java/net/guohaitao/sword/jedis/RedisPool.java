@@ -7,6 +7,7 @@ import com.google.common.eventbus.Subscribe;
 import net.guohaitao.sword.Retrys;
 import net.guohaitao.sword.collection.FixedCircularList;
 import net.guohaitao.sword.concurent.Events;
+import net.guohaitao.sword.jmx.MBeanExporters;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 import redis.clients.jedis.Jedis;
@@ -16,91 +17,146 @@ import redis.clients.jedis.JedisPoolConfig;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.concurrent.Callable;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Created by i@guohaitao.net on 14-10-16.
+ * Created by guohaitao on 14-10-16.
  * Description: Jedis客户端工具
- * <p/>
- * 一主双从结构。主服务器推荐使用keepalive 主备模式，而不是单机,保证高可用。
- * <p/>
- * 从服务器只用来Read，双机保证高可用。
- * <p/>
- * 需要分别设置本地host来明确服务地址 redis.master.local,redis.slave1.local,redis.slave2.local
  */
 public final class RedisPool {
     private static final Logger logger = Logger.getLogger(RedisPool.class.getName());
     /**
      * Jedis连接池配置
      */
-    private static final JedisPoolConfig JEDIS_POOL_CONFIG;
+    private static JedisPoolConfig JEDIS_POOL_CONFIG;
     /**
      * Master服务器连接池
      */
-    private static final JedisPool MASTER_JEDIS_POOL;
+    private static JedisPool MASTER_JEDIS_POOL;
     /**
      * Slave 集群服务器连接池
      */
-    private static final FixedCircularList<RedisPoolState> SLAVE_POOL_LIST;
-    private static final ImmutableMap<String, RedisPoolState> SLAVE_POOL_MAP;
+    private static FixedCircularList<RedisPoolState> SLAVE_POOL_LIST;
+    private static ImmutableMap<String, RedisPoolState> SLAVE_POOL_MAP;
     /**
      * 支持的Host
      */
     private static final String MASTER_HOST = "redis.master.local";
     private static final String SLAVE1_HOST = "redis.slave1.local";
     private static final String SLAVE2_HOST = "redis.slave2.local";
-
+    private static final int DEFAULT_PORT = 6379;
     /**
-     * #最大能够保持idle状态的对象数
-     * redis.pool.maxIdle=128
-     * #最大分配的对象数
-     * redis.pool.maxTotal=1024
-     * #多长时间检查一次连接池中空闲的连接
-     * redis.pool.timeBetweenEvictionRunsMillis=30000
-     * #空闲连接多长时间后会被收回
-     * redis.pool.minEvictableIdleTimeMillis=-1
-     * redis.pool.softMinEvictableIdleTimeMillis=10000
-     * #最大等待间隔时间
-     * redis.pool.maxWaitMillis=2000
-     * #当调用borrow Object方法时，是否进行有效性检查
-     * redis.pool.testOnBorrow=true
-     * redis.pool.testWhileIdle=true
-     * redis.pool.testOnReturn=false
-     * #最多驱逐对象的个数
-     * redis.pool.numTestsPerEvictionRun=1024
+     * 支持启动参数设置
      */
+    private static final String REDIS_HOST_PROPERTY = "redis.host.enabled";
+
+    private static final Lock LOCK = new ReentrantLock();
+
     static {
-        JEDIS_POOL_CONFIG = new JedisPoolConfig();
-        JEDIS_POOL_CONFIG.setMaxIdle(128);
-        JEDIS_POOL_CONFIG.setMaxTotal(1024);
-        JEDIS_POOL_CONFIG.setTimeBetweenEvictionRunsMillis(30000L);
-        JEDIS_POOL_CONFIG.setMinEvictableIdleTimeMillis(-1);
-        JEDIS_POOL_CONFIG.setSoftMinEvictableIdleTimeMillis(10000L);
-        JEDIS_POOL_CONFIG.setMaxWaitMillis(2000L);
-        JEDIS_POOL_CONFIG.setTestOnBorrow(true);
-        JEDIS_POOL_CONFIG.setTestWhileIdle(true);
-        JEDIS_POOL_CONFIG.setTestOnReturn(false);
-        JEDIS_POOL_CONFIG.setNumTestsPerEvictionRun(1024);
-
-        MASTER_JEDIS_POOL = new JedisPool(JEDIS_POOL_CONFIG, MASTER_HOST);
-        //Slave 多连接池
-        JedisPool slave1JedisPool = new JedisPool(JEDIS_POOL_CONFIG, SLAVE1_HOST);
-        JedisPool slave2JedisPool = new JedisPool(JEDIS_POOL_CONFIG, SLAVE2_HOST);
-        RedisPoolState slave1PoolState = new RedisPoolState(slave1JedisPool);
-        slave1PoolState.setHost(SLAVE1_HOST);
-        RedisPoolState slave2PoolState = new RedisPoolState(slave2JedisPool);
-        slave2PoolState.setHost(SLAVE2_HOST);
-        SLAVE_POOL_LIST = FixedCircularList.of(slave1PoolState, slave2PoolState);
-        //host to RedisPoolState 映射
-        SLAVE_POOL_MAP = ImmutableMap.of(SLAVE1_HOST, slave1PoolState, SLAVE2_HOST, slave2PoolState);
-        //注册Jedis关闭事件
-        Events.register(new RedisCloseableListener());
-
-
+        if (Boolean.parseBoolean(System.getProperty(REDIS_HOST_PROPERTY))) {
+            init(MASTER_HOST, DEFAULT_PORT, SLAVE1_HOST, DEFAULT_PORT, SLAVE2_HOST, DEFAULT_PORT);
+        }
     }
 
     private RedisPool() {
+    }
+
+    public static void init(String masterHost, int masterPort,
+                            String slave1Host, int slave1Port,
+                            String slave2Host, int slave2Port) {
+        /**
+         * 开通redis.host.enabled 参数，自动不让初始化
+         */
+        if (Boolean.parseBoolean(System.getProperty(REDIS_HOST_PROPERTY))) {
+            return;
+        }
+        /**
+         * #最大能够保持idle状态的对象数
+         * redis.pool.maxIdle=128
+         * #最大分配的对象数
+         * redis.pool.maxTotal=1024
+         * #多长时间检查一次连接池中空闲的连接
+         * redis.pool.timeBetweenEvictionRunsMillis=30000
+         * #空闲连接多长时间后会被收回
+         * redis.pool.minEvictableIdleTimeMillis=-1
+         * redis.pool.softMinEvictableIdleTimeMillis=10000
+         * #最大等待间隔时间
+         * redis.pool.maxWaitMillis=2000
+         * #当调用borrow Object方法时，是否进行有效性检查
+         * redis.pool.testOnBorrow=true
+         * redis.pool.testWhileIdle=true
+         * redis.pool.testOnReturn=false
+         * #最多驱逐对象的个数
+         * redis.pool.numTestsPerEvictionRun=1024
+         */
+        LOCK.lock();
+        try {
+            if (JEDIS_POOL_CONFIG == null) {
+                JEDIS_POOL_CONFIG = new JedisPoolConfig();
+                JEDIS_POOL_CONFIG.setMaxIdle(128);
+                JEDIS_POOL_CONFIG.setMaxTotal(1024);
+                JEDIS_POOL_CONFIG.setTimeBetweenEvictionRunsMillis(30_000L);
+                JEDIS_POOL_CONFIG.setMinEvictableIdleTimeMillis(-1);
+                JEDIS_POOL_CONFIG.setSoftMinEvictableIdleTimeMillis(10_000L);
+                JEDIS_POOL_CONFIG.setMaxWaitMillis(2_000L);
+                JEDIS_POOL_CONFIG.setTestOnBorrow(false);
+                JEDIS_POOL_CONFIG.setTestWhileIdle(true);
+                JEDIS_POOL_CONFIG.setTestOnReturn(false);
+                JEDIS_POOL_CONFIG.setNumTestsPerEvictionRun(1024);
+
+                MASTER_JEDIS_POOL = new JedisPool(JEDIS_POOL_CONFIG, masterHost, masterPort);
+                //Slave 多连接池
+                JedisPool slave1JedisPool = null, slave2JedisPool = null;
+
+                //host to RedisPoolState 映射
+                String slave1HostAndPort = slave1Host + ":" + slave1Port;
+                String slave2HostAndPort = slave2Host + ":" + slave2Port;
+                if (slave1HostAndPort.equals(slave2HostAndPort)) {
+                    slave1JedisPool = new JedisPool(JEDIS_POOL_CONFIG, slave1Host, slave1Port);
+                    RedisPoolState slave1PoolState = new RedisPoolState(slave1JedisPool);
+                    slave1PoolState.setHost(slave1Host);
+                    SLAVE_POOL_LIST = FixedCircularList.of(slave1PoolState);
+                    SLAVE_POOL_MAP = ImmutableMap.of(slave1HostAndPort, slave1PoolState);
+                } else {
+                    slave1JedisPool = new JedisPool(JEDIS_POOL_CONFIG, slave1Host, slave1Port);
+                    slave2JedisPool = new JedisPool(JEDIS_POOL_CONFIG, slave2Host, slave2Port);
+                    RedisPoolState slave1PoolState = new RedisPoolState(slave1JedisPool);
+                    slave1PoolState.setHost(slave1Host);
+                    RedisPoolState slave2PoolState = new RedisPoolState(slave2JedisPool);
+                    slave2PoolState.setHost(slave2Host);
+                    SLAVE_POOL_LIST = FixedCircularList.of(slave1PoolState, slave2PoolState);
+                    SLAVE_POOL_MAP = ImmutableMap.of(slave1HostAndPort, slave1PoolState, slave2HostAndPort, slave2PoolState);
+                }
+
+                //注册Jedis关闭事件
+                Events.register(new RedisCloseableListener());
+
+                //JMX监控
+                boolean jmxEnabled = Boolean.valueOf(System.getProperty(MBeanExporters.SWORD_JMX_ENABLED, MBeanExporters.SWORD_JMX_DEFAULT));
+                if (jmxEnabled) {
+                    PoolInfo poolInfo = new PoolInfo(MASTER_JEDIS_POOL, slave1JedisPool, slave2JedisPool);
+                    MBeanExporters.registerBean(poolInfo);
+                }
+            }
+        } finally {
+            LOCK.unlock();
+        }
+    }
+
+    /**
+     * 关闭redis pool
+     */
+    public static void close() {
+        try {
+            MASTER_JEDIS_POOL.close();
+            for (RedisPoolState redisPoolState : SLAVE_POOL_MAP.values()) {
+                redisPoolState.getJedisPool().close();
+            }
+        } catch (Exception ex) {
+        }
     }
 
     /**
@@ -224,7 +280,7 @@ public final class RedisPool {
                         MASTER_JEDIS_POOL.returnBrokenResource(redisCloseable.getJedis());
                     }
                 } else {
-                    String host = redisCloseable.getHost();
+                    String host = redisCloseable.getHost() + ":" + redisCloseable.getPort();
                     RedisPoolState redisPoolState = SLAVE_POOL_MAP.get(host);
                     Preconditions.checkNotNull(redisPoolState, "The redisPoolState should not be null.");
                     if (redisCloseable.isNormalClosed) {
@@ -261,11 +317,14 @@ public final class RedisPool {
          */
         private String host;
 
+        private int port;
+
         RedisCloseable(Jedis jedis, boolean isNormalClosed, boolean isMaster) {
             this.jedis = jedis;
             this.isNormalClosed = isNormalClosed;
             this.isMaster = isMaster;
             this.host = jedis.getClient().getHost();
+            this.port = jedis.getClient().getPort();
         }
 
         public Jedis getJedis() {
@@ -282,6 +341,10 @@ public final class RedisPool {
 
         public String getHost() {
             return host;
+        }
+
+        public int getPort() {
+            return port;
         }
     }
 

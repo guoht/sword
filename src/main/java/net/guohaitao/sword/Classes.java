@@ -1,5 +1,8 @@
 package net.guohaitao.sword;
 
+import java.lang.reflect.Field;
+import java.util.List;
+
 /**
  * Created by i@guohaitao.net on 15-1-7.
  * Description: Class工具类
@@ -37,5 +40,21 @@ public final class Classes {
             }
         }
         return cl;
+    }
+
+    /**
+     * 获取运行时加载的class
+     *
+     * @return class列表
+     */
+    public static List<Class> getClassesInJVM() {
+        try {
+            Field field = ClassLoader.class.getDeclaredField("classes");
+            //设置该成员变量为可访问
+            field.setAccessible(true);
+            return (List<Class>) field.get(getDefaultClassLoader());
+        } catch (Throwable ex) {
+        }
+        return null;
     }
 }

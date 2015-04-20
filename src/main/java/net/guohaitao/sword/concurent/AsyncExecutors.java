@@ -2,6 +2,7 @@ package net.guohaitao.sword.concurent;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
+import net.guohaitao.sword.jmx.MBeanExporters;
 
 import javax.annotation.Nonnull;
 import java.util.List;
@@ -15,9 +16,25 @@ import java.util.logging.Logger;
  */
 public final class AsyncExecutors {
     private final static Logger logger = Logger.getLogger(AsyncExecutors.class.getName());
-    private final static int DEFAULT_THREADS = Runtime.getRuntime().availableProcessors() > 1 ? 2 * Runtime.getRuntime().availableProcessors() : 2;
-    private final static ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(DEFAULT_THREADS);
-    private final static int MAX_EXEC_TIME = 10;
+    private final static int DEFAULT_THREADS = Runtime.getRuntime().availableProcessors() > 1 ? Runtime.getRuntime().availableProcessors() + 1 : 2;
+    private final static ThreadPoolExecutor EXECUTOR_SERVICE;
+    private final static int MAX_EXEC_TIME = 60;
+    private final static int MAX_QUEUE_SIZE = 128;
+
+    static {
+        ArrayBlockingQueue<Runnable> arrayBlockingQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+        EXECUTOR_SERVICE = new ThreadPoolExecutor(DEFAULT_THREADS, DEFAULT_THREADS, MAX_EXEC_TIME, TimeUnit.SECONDS, arrayBlockingQueue);
+        EXECUTOR_SERVICE.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+
+        //JMX监控
+        boolean jmxEnabled = Boolean.valueOf(System.getProperty(MBeanExporters.SWORD_JMX_ENABLED, MBeanExporters.SWORD_JMX_DEFAULT));
+        if (jmxEnabled) {
+            net.guohaitao.sword.concurent.ExecutorInfo executorInfo = new net.guohaitao.sword.concurent.ExecutorInfo();
+            executorInfo.setMaxExecTime(MAX_EXEC_TIME);
+            executorInfo.setThreadPoolExecutor(EXECUTOR_SERVICE);
+            MBeanExporters.registerBean(executorInfo);
+        }
+    }
 
     private AsyncExecutors() {
     }
@@ -87,37 +104,8 @@ public final class AsyncExecutors {
         return null;
     }
 
-    /**
-     * 批量异步执行
-     *
-     * @param callableList
-     * @param <E>
-     * @return
-     */
-    public static <E> List<E> execAllSafe(@Nonnull List<Callable<E>> callableList) {
-        Preconditions.checkNotNull(callableList);
-        ExecutorService executorService = Executors.newCachedThreadPool();
-        try {
-            List<Future<E>> futureList = executorService.invokeAll(callableList, MAX_EXEC_TIME, TimeUnit.SECONDS);
-            List<E> list = Lists.newArrayListWithCapacity(callableList.size());
-            for (Future<E> f : futureList) {
-                if (f.isDone() && !f.isCancelled()) {
-                    E element = f.get();
-                    if (element != null) {
-                        list.add(element);
-                    }
-                }
-            }
-            return list;
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "AsyncFunctions.execAllSafe error.", e);
-        } finally {
-            try {
-                executorService.shutdown();
-            } catch (Exception ex) {
-                logger.log(Level.WARNING, "executorService.shutdown error.", ex);
-            }
-        }
-        return null;
+    public static void shutdown() {
+        EXECUTOR_SERVICE.shutdown();
     }
 }
+
