@@ -39,12 +39,6 @@ public class AsyncExecutorsTest {
         stopwatch.stop();
         System.out.println(stopwatch.elapsed(TimeUnit.MILLISECONDS) + "ms");
 
-        //并行
-        System.out.print("Safe并行");
-        stopwatch = Stopwatch.createStarted();
-        list = AsyncExecutors.execAllSafe(getList());
-        stopwatch.stop();
-        System.out.println(stopwatch.elapsed(TimeUnit.MILLISECONDS) + "ms");
     }
 
     private List<Callable<String>> getList() {
